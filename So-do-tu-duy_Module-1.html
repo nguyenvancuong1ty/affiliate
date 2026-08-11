@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Module 1 - Sơ đồ tư duy đầy đủ</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; overflow: hidden; background: #101512; color: #edf3ee; font-family: Inter, "Segoe UI", sans-serif; }
+    canvas { display: block; cursor: grab; touch-action: none; }
+    canvas.dragging { cursor: grabbing; }
+    aside { position: fixed; inset: 0 auto 0 0; z-index: 2; width: min(390px, 34vw); display: flex; flex-direction: column; border-right: 1px solid #344039; background: #151c18; }
+    .detail-head { padding: 23px 24px 17px; border-bottom: 1px solid #344039; }
+    .crumb { min-height: 18px; margin: 0 0 10px; color: #a9b9ad; font-size: 12px; line-height: 1.4; }
+    h1 { margin: 0; color: #f4f9f4; font-size: 20px; font-weight: 650; line-height: 1.25; letter-spacing: 0; }
+    .source { display: inline-block; margin-top: 10px; color: #a7dfd1; font-size: 12px; text-decoration: none; }
+    .source:hover { text-decoration: underline; }
+    .detail-body { flex: 1; overflow: auto; padding: 22px 24px 40px; }
+    .detail-body h2 { margin: 0 0 14px; color: #a9b9ad; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+    pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #e0eae2; font: 14px/1.65 Inter, "Segoe UI", sans-serif; }
+    .toolbar { position: fixed; right: 18px; bottom: 18px; z-index: 3; display: flex; gap: 4px; padding: 5px; border: 1px solid #35413a; border-radius: 7px; background: #18201b; box-shadow: 0 8px 24px #0008; }
+    button { width: 38px; height: 38px; border: 0; border-radius: 4px; background: transparent; color: #e8eee9; font: 21px/1 sans-serif; cursor: pointer; }
+    button:hover:not(:disabled) { background: #2a382e; }
+    button:disabled { color: #667369; cursor: default; }
+    .zoom { min-width: 54px; width: auto; padding: 0 8px; font: 12px Inter, "Segoe UI", sans-serif; cursor: default; }
+    @media (max-width: 850px) {
+      aside { width: 100%; height: 42vh; inset: auto 0 0 0; border-top: 1px solid #344039; border-right: 0; }
+      .detail-head { padding: 14px 18px 11px; }
+      .detail-body { padding: 14px 18px 24px; }
+      .toolbar { right: 12px; bottom: calc(42vh + 12px); }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="mindmap" aria-label="Sơ đồ tư duy đầy đủ Module 1"></canvas>
+  <aside>
+    <div class="detail-head">
+      <p id="breadcrumb" class="crumb"></p>
+      <h1 id="nodeTitle"></h1>
+      <a class="source" href="Module-1-Body-Video-Notion.md">Tài liệu crawl gốc</a>
+    </div>
+    <section class="detail-body">
+      <h2>Nội dung gốc</h2>
+      <pre id="nodeContent"></pre>
+    </section>
+  </aside>
+  <div class="toolbar" aria-label="Điều khiển sơ đồ">
+    <button id="back" title="Quay lại node cha" aria-label="Quay lại node cha">←</button>
+    <button id="home" title="Về đầu tài liệu" aria-label="Về đầu tài liệu">⌂</button>
+    <button id="zoomOut" title="Thu nhỏ" aria-label="Thu nhỏ">−</button>
+    <button id="zoomIn" title="Phóng to" aria-label="Phóng to">+</button>
+    <button id="zoomLabel" class="zoom" aria-label="Mức phóng đại">100%</button>
+  </div>
+
+  <script src="module-1-mindmap-data.js"></script>
+  <script>
+    const canvas = document.getElementById("mindmap");
+    const context = canvas.getContext("2d");
+    const panel = document.querySelector("aside");
+    const breadcrumbElement = document.getElementById("breadcrumb");
+    const titleElement = document.getElementById("nodeTitle");
+    const contentElement = document.getElementById("nodeContent");
+    const backButton = document.getElementById("back");
+    const zoomLabel = document.getElementById("zoomLabel");
+    const tree = window.MODULE_1_MINDMAP.tree;
+    const sourceCharacters = window.MODULE_1_MINDMAP.sourceCharacters;
+    const colors = [
+      { fill: "#0f766e", border: "#99f6e4", text: "#effff9", line: "#5eead4" },
+      { fill: "#174e63", border: "#67e8f9", text: "#effdff", line: "#4fd1e5" },
+      { fill: "#4a2438", border: "#f1a7c7", text: "#fff0f6", line: "#e781ae" },
+      { fill: "#4b3510", border: "#f4c95d", text: "#fff8df", line: "#eab84d" },
+      { fill: "#3b3361", border: "#c4b5fd", text: "#f7f4ff", line: "#a78bfa" },
+      { fill: "#6b2d20", border: "#fdba74", text: "#fff5ed", line: "#fb923c" }
+    ];
+    let focus = tree;
+    let selected = tree;
+    let trail = [];
+    let view = { x: 0, y: 0, scale: 1 };
+    let nodes = [];
+    let dragging = false;
+    let moved = false;
+    let startPointer = { x: 0, y: 0, viewX: 0, viewY: 0 };
+
+    function panelRect() {
+      if (window.innerWidth <= 850) return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight * 0.58 };
+      const width = panel.getBoundingClientRect().width;
+      return { left: width, top: 0, width: window.innerWidth - width, height: window.innerHeight };
+    }
+
+    function resize() {
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(window.innerWidth * ratio);
+      canvas.height = Math.floor(window.innerHeight * ratio);
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      fit();
+    }
+
+    function wrap(text, maxWidth, font) {
+      context.font = font;
+      const words = text.split(" ");
+      const lines = [];
+      let line = "";
+      for (const word of words) {
+        const next = line ? `${line} ${word}` : word;
+        if (context.measureText(next).width > maxWidth && line) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = next;
+        }
+      }
+      if (line) lines.push(line);
+      return lines;
+    }
+
+    function nodeBox(node) {
+      const isFocus = node.id === focus.id;
+      const width = isFocus ? 290 : 254;
+      const fontSize = isFocus ? 19 : 14;
+      const lines = wrap(node.label, width - 34, `${fontSize}px Inter, Segoe UI, sans-serif`);
+      const lineHeight = isFocus ? 24 : 19;
+      const height = Math.max(isFocus ? 68 : 52, lines.length * lineHeight + 28);
+      return { ...node, width, height, lines, fontSize, lineHeight, isFocus };
+    }
+
+    function buildNodes() {
+      const result = [{ ...focus, x: 0, y: 0, color: 0 }];
+      const children = focus.children || [];
+      const count = children.length;
+      const radiusX = count <= 2 ? 440 : count <= 4 ? 500 : 560;
+      const radiusY = count <= 2 ? 250 : count <= 4 ? 330 : 400;
+      children.forEach((child, index) => {
+        const angle = count === 1 ? 0 : -Math.PI / 2 + (Math.PI * 2 * index) / count;
+        result.push({
+          ...child,
+          x: Math.cos(angle) * radiusX,
+          y: Math.sin(angle) * radiusY,
+          color: index % colors.length,
+          child: true
+        });
+      });
+      nodes = result.map(nodeBox);
+    }
+
+    function worldToScreen(x, y) {
+      return { x: x * view.scale + view.x, y: y * view.scale + view.y };
+    }
+
+    function screenToWorld(x, y) {
+      return { x: (x - view.x) / view.scale, y: (y - view.y) / view.scale };
+    }
+
+    function roundedRect(x, y, width, height, radius) {
+      context.beginPath();
+      context.roundRect(x, y, width, height, radius);
+    }
+
+    function connect(parent, child, color) {
+      const direction = child.x >= parent.x ? 1 : -1;
+      const startX = parent.x + direction * parent.width / 2;
+      const endX = child.x - direction * child.width / 2;
+      const middleX = (startX + endX) / 2;
+      context.beginPath();
+      context.moveTo(startX, parent.y);
+      context.bezierCurveTo(middleX, parent.y, middleX, child.y, endX, child.y);
+      context.strokeStyle = color;
+      context.globalAlpha = 0.75;
+      context.lineWidth = 2.4;
+      context.stroke();
+      context.globalAlpha = 1;
+    }
+
+    function drawNode(node) {
+      const style = node.isFocus ? colors[0] : colors[(node.color % (colors.length - 1)) + 1];
+      const left = node.x - node.width / 2;
+      const top = node.y - node.height / 2;
+      roundedRect(left, top, node.width, node.height, node.isFocus ? 11 : 7);
+      context.fillStyle = style.fill;
+      context.fill();
+      context.strokeStyle = node.id === selected.id ? "#ffffff" : style.border;
+      context.lineWidth = node.id === selected.id ? 2.6 : 1.5;
+      context.stroke();
+      context.fillStyle = style.text;
+      context.font = `${node.isFocus ? 650 : 550} ${node.fontSize}px Inter, Segoe UI, sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      const firstY = node.y - ((node.lines.length - 1) * node.lineHeight) / 2;
+      node.lines.forEach((line, index) => context.fillText(line, node.x, firstY + index * node.lineHeight));
+      if (node.child && node.children?.length) {
+        context.beginPath();
+        context.arc(left + node.width - 15, top + 15, 9, 0, Math.PI * 2);
+        context.fillStyle = "#ffffff2e";
+        context.fill();
+        context.fillStyle = style.text;
+        context.font = "600 15px Inter, Segoe UI, sans-serif";
+        context.fillText("›", left + node.width - 15, top + 15.5);
+      }
+    }
+
+    function draw() {
+      buildNodes();
+      const ratio = window.devicePixelRatio || 1;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      context.fillStyle = "#101512";
+      context.fillRect(0, 0, window.innerWidth, window.innerHeight);
+      context.save();
+      context.translate(view.x, view.y);
+      context.scale(view.scale, view.scale);
+      const parent = nodes[0];
+      nodes.slice(1).forEach(child => connect(parent, child, colors[(child.color % (colors.length - 1)) + 1].line));
+      nodes.forEach(drawNode);
+      context.restore();
+      zoomLabel.textContent = `${Math.round(view.scale * 100)}%`;
+    }
+
+    function updateDetail() {
+      const labels = [...trail.map(node => node.label), focus.label];
+      breadcrumbElement.textContent = labels.join("  /  ");
+      titleElement.textContent = selected.label;
+      contentElement.textContent = selected.content || "Không có nội dung trực tiếp ở node này. Hãy chọn một node con để xem phần chi tiết.";
+      backButton.disabled = trail.length === 0;
+    }
+
+    function fit() {
+      buildNodes();
+      const area = panelRect();
+      const minX = Math.min(...nodes.map(node => node.x - node.width / 2));
+      const maxX = Math.max(...nodes.map(node => node.x + node.width / 2));
+      const minY = Math.min(...nodes.map(node => node.y - node.height / 2));
+      const maxY = Math.max(...nodes.map(node => node.y + node.height / 2));
+      view.scale = Math.min((area.width - 100) / (maxX - minX), (area.height - 100) / (maxY - minY), 1.1);
+      view.x = area.left + area.width / 2 - ((minX + maxX) / 2) * view.scale;
+      view.y = area.top + area.height / 2 - ((minY + maxY) / 2) * view.scale;
+      updateDetail();
+      draw();
+    }
+
+    function zoomAt(x, y, factor) {
+      const before = screenToWorld(x, y);
+      view.scale = Math.max(0.28, Math.min(3, view.scale * factor));
+      view.x = x - before.x * view.scale;
+      view.y = y - before.y * view.scale;
+      draw();
+    }
+
+    function nodeAt(screenX, screenY) {
+      const point = screenToWorld(screenX, screenY);
+      return [...nodes].reverse().find(node => point.x >= node.x - node.width / 2 && point.x <= node.x + node.width / 2 && point.y >= node.y - node.height / 2 && point.y <= node.y + node.height / 2);
+    }
+
+    function selectNode(node) {
+      selected = node;
+      if (node.id === focus.id) {
+        updateDetail();
+        draw();
+        return;
+      }
+      if (node.children?.length) {
+        trail.push(focus);
+        focus = node;
+        selected = node;
+        fit();
+      } else {
+        updateDetail();
+        draw();
+      }
+    }
+
+    canvas.addEventListener("wheel", event => {
+      event.preventDefault();
+      zoomAt(event.clientX, event.clientY, event.deltaY < 0 ? 1.13 : 0.885);
+    }, { passive: false });
+    canvas.addEventListener("pointerdown", event => {
+      dragging = true;
+      moved = false;
+      startPointer = { x: event.clientX, y: event.clientY, viewX: view.x, viewY: view.y };
+      canvas.setPointerCapture(event.pointerId);
+      canvas.classList.add("dragging");
+    });
+    canvas.addEventListener("pointermove", event => {
+      const hovered = !dragging && nodeAt(event.clientX, event.clientY);
+      canvas.style.cursor = hovered ? "pointer" : "grab";
+      if (!dragging) return;
+      const dx = event.clientX - startPointer.x;
+      const dy = event.clientY - startPointer.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      view.x = startPointer.viewX + dx;
+      view.y = startPointer.viewY + dy;
+      draw();
+    });
+    canvas.addEventListener("pointerup", event => {
+      canvas.releasePointerCapture(event.pointerId);
+      canvas.classList.remove("dragging");
+      if (!moved) {
+        const node = nodeAt(event.clientX, event.clientY);
+        if (node) selectNode(node);
+      }
+      dragging = false;
+    });
+    document.getElementById("zoomIn").addEventListener("click", () => {
+      const area = panelRect();
+      zoomAt(area.left + area.width / 2, area.top + area.height / 2, 1.22);
+    });
+    document.getElementById("zoomOut").addEventListener("click", () => {
+      const area = panelRect();
+      zoomAt(area.left + area.width / 2, area.top + area.height / 2, 0.82);
+    });
+    document.getElementById("home").addEventListener("click", () => {
+      focus = tree;
+      selected = tree;
+      trail = [];
+      fit();
+    });
+    backButton.addEventListener("click", () => {
+      if (!trail.length) return;
+      focus = trail.pop();
+      selected = focus;
+      fit();
+    });
+    window.addEventListener("resize", resize);
+    resize();
+    fit();
+  </script>
+</body>
+</html>
